@@ -1,1 +1,55 @@
+name: Build APK
 
+# طريقة الاستخدام: ارفع ملف المشروع المضغوط (zip) إلى المستودع بجانب هذا الملف،
+# فيُفكّ تلقائيًا ويُبنى التطبيق. تجد الملف الناتج في Actions ثم Artifacts ثم tajweed-apk.
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: تجهيز المشروع (فك الضغط إن وُجد ملف zip)
+        run: |
+          set -e
+          DEST="$RUNNER_TEMP/proj"
+          mkdir -p "$DEST"
+          ZIP=$(ls -t ./*.zip 2>/dev/null | head -n 1 || true)
+          if [ -n "$ZIP" ]; then
+            echo "فك الضغط: $ZIP"
+            unzip -q -o "$ZIP" -d "$DEST"
+          else
+            echo "لا يوجد ملف zip، سيُبنى المشروع الموجود في المستودع"
+            cp -r . "$DEST/"
+          fi
+          S=$(find "$DEST" -name settings.gradle.kts | awk '{print length($0) " " $0}' | sort -n | head -n 1 | cut -d' ' -f2-)
+          if [ -z "$S" ]; then echo "لم أجد settings.gradle.kts، تأكد أن الملف المضغوط هو مشروع التطبيق"; exit 1; fi
+          echo "PROJ=$(dirname "$S")" >> "$GITHUB_ENV"
+          echo "مجلد المشروع: $(dirname "$S")"
+          # إن رفعت google-services.json في المستودع (خارج الـ zip) يُنسخ تلقائيًا إلى المشروع
+          for G in ./google-services.json ./app/google-services.json; do
+            if [ -f "$G" ]; then cp "$G" "$(dirname "$S")/app/google-services.json"; fi
+          done
+          if [ -f "$(dirname "$S")/app/google-services.json" ]; then echo "تم العثور على google-services.json"; else echo "تنبيه: لا يوجد app/google-services.json (تسجيل الدخول وتحدي الأصدقاء لن يعملا)"; fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      - name: بناء التطبيق
+        working-directory: ${{ env.PROJ }}
+        run: gradle assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tajweed-apk
+          path: ${{ env.PROJ }}/app/build/outputs/apk/debug/*.apk
